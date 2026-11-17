@@ -28,6 +28,7 @@ jobs:
           PG_BRIDGE_TARGET: ${{ matrix.target }}
         run: |
           moon version --all
+          moon update
           moon check --target "$PG_BRIDGE_TARGET" --deny-warn
           moon test --target "$PG_BRIDGE_TARGET"
           scripts/integration.sh
