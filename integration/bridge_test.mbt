@@ -182,6 +182,26 @@ async test "postgres parameter binding and rollback" {
     assert_eq(check, 0L)
     let second_bridge = @bridge.Bridge::new(second)
     let second_driver : &@db.AsyncDriver = second_bridge
+    second_driver.begin()
+    second_driver.execute("INSERT INTO bridge_test VALUES (12, 'failed')", [])
+    |> ignore
+    try second_driver.execute("SELECT 1 / 0", []) |> ignore catch {
+      _ => ()
+    }
+    let commit_failed = try {
+      second_driver.commit()
+      false
+    } catch {
+      _ => true
+    }
+    assert_true(commit_failed)
+    assert_eq(
+      second_driver.query(
+        "SELECT count(*)::int8 FROM bridge_test WHERE id = 12",
+        [],
+      )[0].values,
+      [Int64(0L)],
+    )
     second.abort()
     let external_close = try {
       second_driver.query("SELECT 1", []) |> ignore

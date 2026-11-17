@@ -6,11 +6,18 @@ pub struct Bridge {
   mut transaction : @pg.Transaction?
   mut closed : Bool
   mut busy : Bool
+  mut failed_transaction : Bool
 }
 
 ///|
 pub fn Bridge::new(client : @pg.Client) -> Bridge {
-  { client, transaction: None, closed: false, busy: false, }
+  {
+    client,
+    transaction: None,
+    closed: false,
+    busy: false,
+    failed_transaction: false,
+  }
 }
 
 ///|
@@ -29,6 +36,7 @@ fn Bridge::enter(self : Bridge) -> Unit raise @db.DbError {
 fn Bridge::abort(self : Bridge) -> Unit {
   self.closed = true
   self.transaction = None
+  self.failed_transaction = false
   self.client.abort()
 }
 
@@ -159,7 +167,12 @@ pub impl @db.AsyncDriver for Bridge with fn execute(self, sql, params) {
       None => self.client.execute(sql, params=p)
     }
   } catch {
-    e => raise map_error(e)
+    e => {
+      if self.transaction is Some(_) && e is @pg.ClientError::Database(_) {
+        self.failed_transaction = true
+      }
+      raise map_error(e)
+    }
   }
   if n > 9223372036854775807UL {
     raise @db.QueryError("affected row count exceeds Int64")
@@ -182,7 +195,12 @@ pub impl @db.AsyncDriver for Bridge with fn query(self, sql, params) {
     }
     rows.map(convert_row)
   } catch {
-    e => raise map_error(e)
+    e => {
+      if self.transaction is Some(_) && e is @pg.ClientError::Database(_) {
+        self.failed_transaction = true
+      }
+      raise map_error(e)
+    }
   }
 }
 
@@ -217,6 +235,16 @@ pub impl @db.AsyncDriver for Bridge with fn commit(self) {
     raise @db.QueryError("no active transaction")
   }
   self.transaction = None
+  if self.failed_transaction {
+    self.failed_transaction = false
+    tx.rollback() catch {
+      e => {
+        self.abort()
+        raise map_error(e)
+      }
+    }
+    raise @db.QueryError("transaction was rolled back after a PostgreSQL error")
+  }
   tx.commit() catch {
     e => {
       self.abort()
@@ -236,6 +264,7 @@ pub impl @db.AsyncDriver for Bridge with fn rollback(self) {
     raise @db.QueryError("no active transaction")
   }
   self.transaction = None
+  self.failed_transaction = false
   tx.rollback() catch {
     e => {
       self.abort()

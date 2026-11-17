@@ -30,7 +30,9 @@ transaction committed or rolled back.
 
 Server errors retain SQLSTATE, severity, detail and hint. After an ordinary SQL
 error inside a transaction, explicitly roll back; PostgreSQL generally marks the
-transaction failed. A failed BEGIN, COMMIT or ROLLBACK invalidates the connection.
+transaction failed. If a PostgreSQL error occurs in a transaction, a later commit
+performs a rollback and returns an error; after that rollback the connection may
+be reused. Errors establishing or completing a transaction invalidate it.
 `close` is idempotent; closing while another call is active aborts the connection.
 
 ## Type and operation boundary

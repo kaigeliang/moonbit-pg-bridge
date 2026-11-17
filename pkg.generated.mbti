@@ -16,6 +16,7 @@ pub struct Bridge {
   mut transaction : @client.Transaction?
   mut closed : Bool
   mut busy : Bool
+  mut failed_transaction : Bool
 }
 pub fn Bridge::new(@client.Client) -> Self
 pub impl @moondb.AsyncDriver for Bridge
