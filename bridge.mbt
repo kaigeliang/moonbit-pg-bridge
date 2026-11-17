@@ -50,6 +50,9 @@ fn map_error(e : Error) -> @db.DbError {
       })
     @db.DbError::TypeError(m) => @db.TypeError(m)
     @pg.ClientError::Closed(_) => @db.Closed
+    @pg.ClientError::WrongType(_)
+    | @pg.ClientError::Encode(_)
+    | @pg.ClientError::Decode(_) => @db.TypeError(e.to_string())
     _ => @db.QueryError(e.to_string())
   }
 }

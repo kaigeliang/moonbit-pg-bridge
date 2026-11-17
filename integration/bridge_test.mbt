@@ -96,6 +96,14 @@ async test "postgres parameter binding and rollback" {
       e => e is @db.TypeError(_)
     }
     assert_true(bad_json)
+    let wrong_type = try {
+      driver.query("SELECT $1::int4", [Text("not an integer")]) |> ignore
+      false
+    } catch {
+      e => e is @db.TypeError(_)
+    }
+    assert_true(wrong_type)
+    assert_eq(driver.query("SELECT 2::int4", [])[0].values, [Int(2)])
     let nulls = driver.query("SELECT $1::int4 AS n", [Null])
     assert_eq(nulls[0].values, [Null])
     driver.rollback()
