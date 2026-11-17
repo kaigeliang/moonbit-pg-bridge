@@ -67,6 +67,12 @@ fn parameters(values : Array[@db.Value]) -> Array[&@pg.ToSql] raise @db.DbError 
       Double(x) => out.push(x as &@pg.ToSql)
       Text(x) => out.push(x as &@pg.ToSql)
       Blob(x) => out.push(x as &@pg.ToSql)
+      Json(text) => {
+        let value = @json.parse(text) catch {
+          _ => raise @db.TypeError("invalid JSON parameter")
+        }
+        out.push(value as &@pg.ToSql)
+      }
       _ => raise @db.TypeError("unsupported parameter: " + value.kind())
     }
   }
@@ -89,7 +95,9 @@ fn convert_row(row : @pg.Row) -> @db.Row raise {
       ty == @pg.Type::float8() ||
       ty == @pg.Type::text() ||
       ty == @pg.Type::varchar() ||
-      ty == @pg.Type::bytea()) {
+      ty == @pg.Type::bytea() ||
+      ty == @pg.Type::json() ||
+      ty == @pg.Type::jsonb()) {
       raise @db.TypeError(
         "unsupported PostgreSQL type \{ty.name} (OID \{ty.oid}) in column \{col.name} at index \{i}",
       )
@@ -109,6 +117,9 @@ fn convert_row(row : @pg.Row) -> @db.Row raise {
       Double(row.get(i))
     } else if ty == @pg.Type::text() || ty == @pg.Type::varchar() {
       Text(row.get(i))
+    } else if ty == @pg.Type::json() || ty == @pg.Type::jsonb() {
+      let json : Json = row.get(i)
+      Json(json.stringify())
     } else if ty == @pg.Type::bytea() {
       Blob(row.get(i))
     } else {

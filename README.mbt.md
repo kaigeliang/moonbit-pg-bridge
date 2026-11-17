@@ -35,10 +35,10 @@ transaction failed. A failed BEGIN, COMMIT or ROLLBACK invalidates the connectio
 
 ## Type and operation boundary
 
-Inputs: `Null`, `Bool`, `Int`, `Int64`, `Double`, `Text`, `Blob`. The upstream
+Inputs: `Null`, `Bool`, `Int`, `Int64`, `Double`, `Text`, `Blob`, `Json`. The upstream
 client checks each parameter against the PostgreSQL type. Outputs: BOOL, INT2,
-INT4, INT8, FLOAT4, FLOAT8, TEXT, VARCHAR and BYTEA, including SQL NULL. Other
-`moondb.Value` cases and PostgreSQL types, including numeric, dates, UUID, JSON
+INT4, INT8, FLOAT4, FLOAT8, TEXT, VARCHAR, BYTEA, JSON and JSONB, including SQL NULL. Other
+`moondb.Value` cases and PostgreSQL types, including numeric, dates, UUID
 and arrays, are rejected. Columns retain their order and names. This is a
 bounded subset, not full PostgreSQL type support.
 
