@@ -15,7 +15,8 @@ pub fn Bridge::new(client : @pg.Client) -> Bridge {
 
 ///|
 fn Bridge::enter(self : Bridge) -> Unit raise @db.DbError {
-  if self.closed {
+  if self.closed || self.client.is_closed() {
+    self.closed = true
     raise @db.Closed
   }
   if self.busy {
@@ -48,6 +49,7 @@ fn map_error(e : Error) -> @db.DbError {
         severity: d.severity,
       })
     @db.DbError::TypeError(m) => @db.TypeError(m)
+    @pg.ClientError::Closed(_) => @db.Closed
     _ => @db.QueryError(e.to_string())
   }
 }

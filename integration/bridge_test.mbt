@@ -147,7 +147,19 @@ async test "postgres parameter binding and rollback" {
       .query_one("SELECT count(*)::int8 FROM bridge_test WHERE id = 11")
       .get(0)
     assert_eq(check, 0L)
-    second.close()
-    task2.wait()
+    let second_bridge = @bridge.Bridge::new(second)
+    let second_driver : &@db.AsyncDriver = second_bridge
+    second.abort()
+    let external_close = try {
+      second_driver.query("SELECT 1", []) |> ignore
+      false
+    } catch {
+      e => e is @db.Closed
+    }
+    assert_true(external_close)
+    second_driver.close()
+    task2.wait() catch {
+      _ => ()
+    }
   })
 }
