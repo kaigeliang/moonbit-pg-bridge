@@ -4,6 +4,7 @@ import {
   "moonbit-community/postgres/client" @pg,
   "moonbitlang/async",
   "moonbitlang/core/env",
+  "moonbitlang/core/string",
 } for "test"
 
 supported_targets = "native+wasm"

@@ -1,7 +1,7 @@
 ///|
 async test "consumer uses the public driver interface" {
   @async.with_task_group(group => {
-    let config = @pg.Config::Config("127.0.0.1", user="bridge_test", database="postgres", port=55438, ssl_mode=Disable, application_name="independent-consumer")
+    let config = @pg.Config::Config("127.0.0.1", user="bridge_test", database="postgres", port=@string.parse_int(@env.get_env_var("PG_BRIDGE_PORT").unwrap_or("55438")), ssl_mode=Disable, application_name="independent-consumer")
     let (client, executor) = @pg.Client::create(config)
     let runner = group.spawn(no_wait=true, () => executor.run())
     client.ready()

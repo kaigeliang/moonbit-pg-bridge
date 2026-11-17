@@ -62,7 +62,7 @@ PG_BRIDGE_TARGET=wasm scripts/integration.sh
 The ordinary test command skips the database scenario unless
 `PG_BRIDGE_INTEGRATION=1`; a passing ordinary test is not a database result.
 The integration script starts a temporary trust-authenticated database on
-127.0.0.1:55438, runs the database suite and copies the source and a separate
+127.0.0.1:55438 (override with `PG_BRIDGE_PORT`), runs the database suite and copies the source and a separate
 consumer into a temporary workspace to run its test. It refuses an occupied
 PostgreSQL port, stops the server on exit, and leaves temporary files for
 inspection. The consumer test uses local workspace source: it does **not** prove

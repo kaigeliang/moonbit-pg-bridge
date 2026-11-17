@@ -8,7 +8,9 @@ async test "postgres parameter binding and rollback" {
       "127.0.0.1",
       user="bridge_test",
       database="postgres",
-      port=55438,
+      port=@string.parse_int(
+        @env.get_env_var("PG_BRIDGE_PORT").unwrap_or("55438"),
+      ),
       ssl_mode=Disable,
       application_name="bridge-test",
     )
