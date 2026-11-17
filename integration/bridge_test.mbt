@@ -21,6 +21,23 @@ async test "postgres parameter binding and rollback" {
     let driver : &@db.AsyncDriver = bridge
     driver.execute("CREATE TABLE bridge_test (id INT4, name TEXT)", [])
     |> ignore
+    let missing_tx = try {
+      driver.commit()
+      false
+    } catch {
+      e => e is @db.QueryError(_)
+    }
+    assert_true(missing_tx)
+    driver.begin()
+    let duplicate_begin = try {
+      driver.begin()
+      false
+    } catch {
+      e => e is @db.QueryError(_)
+    }
+    assert_true(duplicate_begin)
+    driver.rollback()
+    assert_eq(driver.query("SELECT 5::int4", [])[0].values, [Int(5)])
     driver.begin()
     driver.execute("INSERT INTO bridge_test VALUES ($1, $2)", [
       Int(7),
