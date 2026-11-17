@@ -39,7 +39,9 @@ Inputs: `Null`, `Bool`, `Int`, `Int64`, `Double`, `Text`, `Blob`, `Json`. The up
 client checks each parameter against the PostgreSQL type. Outputs: BOOL, INT2,
 INT4, INT8, FLOAT4, FLOAT8, TEXT, VARCHAR, BYTEA, JSON and JSONB, including SQL NULL. Other
 `moondb.Value` cases and PostgreSQL types, including numeric, dates, UUID
-and arrays, are rejected. Columns retain their order and names. This is a
+and arrays, are rejected. JSON numbers preserve their lexical precision during
+binding and are read as PostgreSQL returns them; JSONB may normalize whitespace
+and key order. Columns retain their order and names. This is a
 bounded subset, not full PostgreSQL type support.
 
 SQL uses PostgreSQL `$1`, `$2`, … placeholders. `last_insert_id` is zero; use

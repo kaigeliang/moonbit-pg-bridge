@@ -70,7 +70,7 @@ fn parameters(values : Array[@db.Value]) -> Array[&@pg.ToSql] raise @db.DbError 
       Text(x) => out.push(x as &@pg.ToSql)
       Blob(x) => out.push(x as &@pg.ToSql)
       Json(text) => {
-        let value = @json.parse(text) catch {
+        let value = @json.parse(text, preserve_number_repr=true) catch {
           _ => raise @db.TypeError("invalid JSON parameter")
         }
         out.push(value as &@pg.ToSql)
@@ -120,8 +120,16 @@ fn convert_row(row : @pg.Row) -> @db.Row raise {
     } else if ty == @pg.Type::text() || ty == @pg.Type::varchar() {
       Text(row.get(i))
     } else if ty == @pg.Type::json() || ty == @pg.Type::jsonb() {
-      let json : Json = row.get(i)
-      Json(json.stringify())
+      let raw = row.get_raw(i).unwrap()
+      let bytes = if ty == @pg.Type::jsonb() && col.format is Binary {
+        guard raw.length() > 0 && raw[0] == b'\x01' else {
+          raise @db.TypeError("invalid JSONB version")
+        }
+        raw[1:]
+      } else {
+        raw[:]
+      }
+      Json(@utf8.decode(bytes))
     } else if ty == @pg.Type::bytea() {
       Blob(row.get(i))
     } else {

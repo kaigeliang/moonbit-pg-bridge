@@ -80,7 +80,15 @@ async test "postgres parameter binding and rollback" {
       Json("{\"a\":1}"),
       Json("[true,null]"),
     ])
-    assert_eq(json[0].values, [Json("{\"a\":1}"), Json("[true,null]")])
+    assert_eq(json[0].values, [Json("{\"a\":1}"), Json("[true, null]")])
+    let precise = driver.query("SELECT $1::json AS j, $2::jsonb AS b", [
+      Json("12345678901234567890.123456789"),
+      Json("12345678901234567890.123456789"),
+    ])
+    assert_eq(precise[0].values, [
+      Json("12345678901234567890.123456789"),
+      Json("12345678901234567890.123456789"),
+    ])
     let bad_json = try {
       driver.query("SELECT $1::json", [Json("{")]) |> ignore
       false
