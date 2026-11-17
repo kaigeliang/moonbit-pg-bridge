@@ -1,0 +1,25 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "kaigeliang/moonbit-pg-bridge"
+
+import {
+  "moonbit-community/postgres/client",
+  "moonbitstack/moondb",
+}
+
+// Values
+
+// Errors
+
+// Types and methods
+pub struct Bridge {
+  client : @client.Client
+  mut transaction : @client.Transaction?
+  mut closed : Bool
+  mut busy : Bool
+}
+pub fn Bridge::new(@client.Client) -> Self
+pub impl @moondb.AsyncDriver for Bridge
+
+// Type aliases
+
+// Traits

@@ -1,0 +1,7 @@
+import {
+  "moonbitstack/moondb" @db,
+  "moonbit-community/postgres/client" @pg,
+  "moonbitlang/async",
+}
+
+supported_targets = "native+wasm"

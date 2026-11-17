@@ -1,0 +1,9 @@
+import {
+  "kaigeliang/moonbit-pg-bridge" @bridge,
+  "moonbitstack/moondb" @db,
+  "moonbit-community/postgres/client" @pg,
+  "moonbitlang/async",
+  "moonbitlang/core/env",
+} for "test"
+
+supported_targets = "native+wasm"
