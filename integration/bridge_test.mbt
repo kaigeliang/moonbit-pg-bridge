@@ -69,13 +69,15 @@ async test "postgres parameter binding and rollback" {
     |> ignore
     driver.commit()
     assert_eq(driver.query("SELECT id FROM bridge_test", [])[0].values, [Int(9)])
-    let rejected = try {
-      driver.query("SELECT NULL::numeric", []) |> ignore
-      false
+    let diagnostic = try {
+      driver.query("SELECT NULL::numeric AS price", []) |> ignore
+      ""
     } catch {
-      _ => true
+      @db.TypeError(message) => message
+      _ => "wrong error"
     }
-    assert_true(rejected)
+    assert_true(diagnostic.contains("price"))
+    assert_true(diagnostic.contains("numeric"))
     // A PostgreSQL error leaves the transaction aborted; rollback restores it.
     driver.begin()
     let sqlstate = try {

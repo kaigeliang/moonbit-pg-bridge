@@ -90,7 +90,9 @@ fn convert_row(row : @pg.Row) -> @db.Row raise {
       ty == @pg.Type::text() ||
       ty == @pg.Type::varchar() ||
       ty == @pg.Type::bytea()) {
-      raise @db.TypeError("unsupported PostgreSQL column type")
+      raise @db.TypeError(
+        "unsupported PostgreSQL type \{ty.name} (OID \{ty.oid}) in column \{col.name} at index \{i}",
+      )
     }
     let v : @db.Value = if row.get_raw(i) is None {
       Null
@@ -110,7 +112,9 @@ fn convert_row(row : @pg.Row) -> @db.Row raise {
     } else if ty == @pg.Type::bytea() {
       Blob(row.get(i))
     } else {
-      raise @db.TypeError("unsupported PostgreSQL column type")
+      raise @db.TypeError(
+        "unsupported PostgreSQL type \{ty.name} (OID \{ty.oid}) in column \{col.name} at index \{i}",
+      )
     }
     values.push(v)
   }
