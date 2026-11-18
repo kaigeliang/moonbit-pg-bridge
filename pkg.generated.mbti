@@ -13,13 +13,21 @@ import {
 // Types and methods
 pub struct Bridge {
   client : @client.Client
-  mut transaction : @client.Transaction?
   mut closed : Bool
   mut busy : Bool
-  mut failed_transaction : Bool
+  // private fields
 }
 pub fn Bridge::new(@client.Client) -> Self
+pub async fn[T] Bridge::with_savepoint(Self, String, async (TransactionScope) -> T) -> T
+pub async fn[T] Bridge::with_transaction(Self, async (TransactionScope) -> T, options? : @client.TransactionOptions) -> T
 pub impl @moondb.AsyncDriver for Bridge
+
+pub struct TransactionScope {
+  // private fields
+}
+pub async fn TransactionScope::execute(Self, String, Array[@moondb.Value]) -> @moondb.ExecResult raise @moondb.DbError
+pub async fn TransactionScope::query(Self, String, Array[@moondb.Value]) -> Array[@moondb.Row] raise @moondb.DbError
+pub async fn[T] TransactionScope::with_savepoint(Self, String, async (Self) -> T) -> T
 
 // Type aliases
 

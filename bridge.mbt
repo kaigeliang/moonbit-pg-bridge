@@ -3,28 +3,39 @@
 /// Callers must keep its executor alive and serialize access to this bridge.
 pub struct Bridge {
   client : @pg.Client
-  mut transaction : @pg.Transaction?
+  priv mut transaction : TransactionState?
+  priv mut scope : TransactionScope?
   mut closed : Bool
   mut busy : Bool
-  mut failed_transaction : Bool
 }
 
 ///|
 pub fn Bridge::new(client : @pg.Client) -> Bridge {
-  {
-    client,
-    transaction: None,
-    closed: false,
-    busy: false,
-    failed_transaction: false,
+  { client, transaction: None, scope: None, closed: false, busy: false, }
+}
+
+///|
+fn Bridge::check_open(self : Bridge) -> Unit raise @db.DbError {
+  if self.closed || self.client.is_closed() {
+    self.closed = true
+    self.transaction = None
+    self.scope = None
+    raise @db.Closed
   }
 }
 
 ///|
-fn Bridge::enter(self : Bridge) -> Unit raise @db.DbError {
-  if self.closed || self.client.is_closed() {
-    self.closed = true
-    raise @db.Closed
+fn Bridge::enter(
+  self : Bridge,
+  scope? : TransactionScope,
+) -> Unit raise @db.DbError {
+  self.check_open()
+  match (scope, self.scope) {
+    (None, None) => ()
+    (Some(requested), Some(active)) if physical_equal(requested, active) => ()
+    (None, Some(_)) =>
+      raise @db.QueryError("bridge has an active transaction scope")
+    (Some(_), _) => raise @db.QueryError("transaction scope is not active")
   }
   if self.busy {
     raise @db.QueryError("bridge is busy")
@@ -36,7 +47,7 @@ fn Bridge::enter(self : Bridge) -> Unit raise @db.DbError {
 fn Bridge::abort(self : Bridge) -> Unit {
   self.closed = true
   self.transaction = None
-  self.failed_transaction = false
+  self.scope = None
   self.client.abort()
 }
 
@@ -154,25 +165,21 @@ fn convert_row(row : @pg.Row) -> @db.Row raise {
 }
 
 ///|
-pub impl @db.AsyncDriver for Bridge with fn execute(self, sql, params) {
-  self.enter()
-  defer {
-    self.busy = false
-  }
+async fn Bridge::execute_on(
+  self : Bridge,
+  tx : TransactionState?,
+  sql : String,
+  params : Array[@db.Value],
+) -> @db.ExecResult raise @db.DbError {
   errdefer (if @async.is_being_cancelled() { self.abort() })
   let p = parameters(params)
   let n = try {
-    match self.transaction {
-      Some(tx) => tx.execute(sql, params=p)
+    match tx {
+      Some(state) => state.handle.execute(sql, params=p)
       None => self.client.execute(sql, params=p)
     }
   } catch {
-    e => {
-      if self.transaction is Some(_) && e is @pg.ClientError::Database(_) {
-        self.failed_transaction = true
-      }
-      raise map_error(e)
-    }
+    e => raise operation_error(tx, e)
   }
   if n > 9223372036854775807UL {
     raise @db.QueryError("affected row count exceeds Int64")
@@ -181,102 +188,84 @@ pub impl @db.AsyncDriver for Bridge with fn execute(self, sql, params) {
 }
 
 ///|
+async fn Bridge::query_on(
+  self : Bridge,
+  tx : TransactionState?,
+  sql : String,
+  params : Array[@db.Value],
+) -> Array[@db.Row] raise @db.DbError {
+  errdefer (if @async.is_being_cancelled() { self.abort() })
+  let p = parameters(params)
+  try {
+    let rows = match tx {
+      Some(state) => {
+        state.stream_error = None
+        let stream = state.handle.query(sql, params=p)
+        let rows = stream.collect() catch {
+          @pg.ClientError::Database(payload) as error => {
+            state.stream_error = Some(payload)
+            raise error
+          }
+          error => raise error
+        }
+        if state.failed && is_rollback_to_savepoint(sql) {
+          state.failed = false
+        }
+        rows
+      }
+      None => self.client.query(sql, params=p).collect()
+    }
+    rows.map(convert_row)
+  } catch {
+    e => raise operation_error(tx, e)
+  }
+}
+
+///|
+pub impl @db.AsyncDriver for Bridge with fn execute(self, sql, params) {
+  self.enter()
+  defer {
+    self.busy = false
+  }
+  let tx = self.transaction
+  if tx is Some(state) && state.failed && is_rollback_to_savepoint(sql) {
+    // Register a new stream so the client forgets the completed stream
+    // that reported the error before this savepoint recovery.
+    self.query_on(tx, sql, params) |> ignore
+    { rows_affected: 0L, last_insert_id: 0L, }
+  } else {
+    self.execute_on(tx, sql, params)
+  }
+}
+
+///|
 pub impl @db.AsyncDriver for Bridge with fn query(self, sql, params) {
   self.enter()
   defer {
     self.busy = false
   }
-  errdefer (if @async.is_being_cancelled() { self.abort() })
-  let p = parameters(params)
-  try {
-    let rows = match self.transaction {
-      Some(tx) => tx.query(sql, params=p).collect()
-      None => self.client.query(sql, params=p).collect()
-    }
-    rows.map(convert_row)
-  } catch {
-    e => {
-      if self.transaction is Some(_) && e is @pg.ClientError::Database(_) {
-        self.failed_transaction = true
-      }
-      raise map_error(e)
-    }
-  }
+  self.query_on(self.transaction, sql, params)
 }
 
 ///|
 pub impl @db.AsyncDriver for Bridge with fn begin(self) {
-  self.enter()
-  defer {
-    self.busy = false
-  }
-  errdefer (if @async.is_being_cancelled() { self.abort() })
-  if self.transaction is Some(_) {
-    raise @db.QueryError("transaction already active")
-  }
-  self.transaction = Some(
-    self.client.transaction() catch {
-      e => {
-        self.abort()
-        raise map_error(e)
-      }
-    },
-  )
+  self.transaction = Some(self.start_transaction(@pg.TransactionOptions()))
 }
 
 ///|
 pub impl @db.AsyncDriver for Bridge with fn commit(self) {
-  self.enter()
-  defer {
-    self.busy = false
-  }
-  errdefer (if @async.is_being_cancelled() { self.abort() })
-  guard self.transaction is Some(tx) else {
-    raise @db.QueryError("no active transaction")
-  }
-  self.transaction = None
-  if self.failed_transaction {
-    self.failed_transaction = false
-    tx.rollback() catch {
-      e => {
-        self.abort()
-        raise map_error(e)
-      }
-    }
-    raise @db.QueryError("transaction was rolled back after a PostgreSQL error")
-  }
-  tx.commit() catch {
-    e => {
-      self.abort()
-      raise map_error(e)
-    }
-  }
+  self.finish_manual_transaction(commit=true)
 }
 
 ///|
 pub impl @db.AsyncDriver for Bridge with fn rollback(self) {
-  self.enter()
-  defer {
-    self.busy = false
-  }
-  errdefer (if @async.is_being_cancelled() { self.abort() })
-  guard self.transaction is Some(tx) else {
-    raise @db.QueryError("no active transaction")
-  }
-  self.transaction = None
-  self.failed_transaction = false
-  tx.rollback() catch {
-    e => {
-      self.abort()
-      raise map_error(e)
-    }
-  }
+  self.finish_manual_transaction(commit=false)
 }
 
 ///|
 pub impl @db.AsyncDriver for Bridge with fn close(self) {
   if !self.closed {
-    if self.busy {
+    if self.busy || self.scope is Some(_) || self.transaction is Some(_) {
       self.abort()
       return
     }
@@ -304,7 +293,7 @@ pub impl @db.AsyncDriver for Bridge with fn capabilities(_self) {
     streaming_copy: false,
     notifications: false,
     transactions: true,
-    savepoints: false,
+    savepoints: true,
     multiple_result_sets: false,
     unsigned_integers: false,
     returning: true,

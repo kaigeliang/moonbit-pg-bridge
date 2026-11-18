@@ -21,8 +21,8 @@ PG_BRIDGE_PORT="$port" PG_BRIDGE_INTEGRATION=1 moon test --target "$target" -p k
 # Copy the consumer and current source into a fresh workspace. This exercises
 # the public interface through a separate module, not a registry installation.
 mkdir -p "$dir/workspace/bridge" "$dir/workspace/consumer"
-cp moon.mod moon.pkg bridge.mbt "$dir/workspace/bridge/"
+cp moon.mod moon.pkg bridge.mbt transaction.mbt scope_sql.mbt "$dir/workspace/bridge/"
 cp consumer/moon.mod consumer/moon.pkg consumer/consumer_test.mbt "$dir/workspace/consumer/"
 printf 'members = ["bridge", "consumer"]\n' > "$dir/workspace/moon.work"
-PG_BRIDGE_PORT="$port" moon -C "$dir/workspace/consumer" test --target native
+PG_BRIDGE_PORT="$port" moon -C "$dir/workspace/consumer" test --target "$target"
 printf 'Temporary cluster files retained at %s (server stops on exit)\n' "$dir"

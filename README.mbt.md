@@ -1,87 +1,129 @@
 # MoonBit PostgreSQL Bridge
 
-A MoonBit adapter connecting `moonbit-community/postgres/client` to
-`moonbitstack/moondb.AsyncDriver`. It enables a consumer written against the
-moondb interface to use an existing community PostgreSQL client. It does not
-implement another PostgreSQL wire protocol.
+A MoonBit adapter that lets code written against `moonbitstack/moondb.AsyncDriver`
+use the `moonbit-community/postgres/client` PostgreSQL driver. The bridge maps
+parameters, rows, and errors to moondb types and manages PostgreSQL transactions
+and savepoints.
 
-**Status:** experimental, not published. Tested locally on macOS with PostgreSQL
-15.18, MoonBit 0.1.20261117, `moondb@0.3.0`, `postgres@0.1.3`, and
-`async@0.22.5`. Native and classic wasm integration tests have run locally. No CI results or independent package publication are
-claimed.
+**Status** · Experimental. Verified locally on macOS with PostgreSQL 15.18,
+MoonBit 0.1.20261117, `moondb@0.3.0`, `postgres@0.1.3`, and `async@0.22.5`.
+The native and classic wasm targets each passed the PostgreSQL integration suite
+and the independent consumer test.
 
 ## Usage and ownership
 
-Create the community client, spawn its executor, wait for `ready()`, then pass the
-client to `Bridge::new` and call it through `&@moondb.AsyncDriver`. See the
-[separate consumer](consumer/consumer_test.mbt). The bridge owns the client:
-keep the executor running until the bridge closes, and do not call or share the
-underlying client while the bridge is in use.
+Create the community client, spawn its executor, wait for `ready()`, and pass the
+client to `Bridge::new`. Keep the executor running until the bridge closes and
+use the bridge as the exclusive owner of that client. The
+[independent consumer](consumer/consumer_test.mbt) shows setup and calls through
+`&@db.AsyncDriver`.
 
-One operation at a time is accepted; overlapping calls return `QueryError` rather
-than waiting. This prevents simultaneous manipulation of the handle, but does
-**not** assign transaction ownership to a task. Callers must ensure all calls
-between begin and commit/rollback belong to the same logical unit of work. Do not
-share the handle across uncoordinated tasks or pool it. If a task is cancelled
-while operating on the bridge, the connection is aborted and must be replaced;
-server work may continue until the connection is closed. No automatic retry is
-performed. A failed commit has an unknown outcome: callers must not assume the
-transaction committed or rolled back.
+### Scoped transactions and savepoints
 
-Server errors retain SQLSTATE, severity, detail and hint. After an ordinary SQL
-error inside a transaction, explicitly roll back; PostgreSQL generally marks the
-transaction failed. If a PostgreSQL error occurs in a transaction, a later commit
-performs a rollback and returns an error; after that rollback the connection may
-be reused. Errors establishing or completing a transaction invalidate it.
-`close` is idempotent; closing while another call is active aborts the connection.
+Use `Bridge::with_transaction` for a callback that owns the connection until it
+returns. Call `execute` and `query` on the supplied `TransactionScope`. The bridge
+commits on normal return and forwards the callback result. On failure it rolls
+back and propagates the callback error.
 
-## Type and operation boundary
+`TransactionScope::with_savepoint` gives a nested callback its own handle. On
+success it releases the savepoint. On failure it rolls back and releases the
+savepoint. If the outer callback catches the error, it can continue and commit
+its other work. The same name can be reused at different nesting levels. Names
+are quoted PostgreSQL identifiers of 1–63 UTF-8 bytes and may contain spaces or
+quotes. NUL is rejected.
 
-Inputs: `Null`, `Bool`, `Int`, `Int64`, `Double`, `Text`, `Blob`, `Json`. The upstream
-client checks each parameter against the PostgreSQL type. Outputs: BOOL, INT2,
-INT4, INT8, FLOAT4, FLOAT8, TEXT, VARCHAR, BYTEA, JSON and JSONB, including SQL NULL. Other
-`moondb.Value` cases and PostgreSQL types, including numeric, dates, UUID
-and arrays, are rejected. JSON numbers preserve their lexical precision during
-binding and are read as PostgreSQL returns them; JSONB may normalize whitespace
-and key order. Columns retain their order and names. This is a
-bounded subset, not full PostgreSQL type support.
+```moonbit nocheck
+///|
+let rows = bridge.with_transaction(tx => {
+  tx.execute("CREATE TEMP TABLE demo_items (id int) ON COMMIT DROP", [])
+  |> ignore
+  tx.with_savepoint("add item", child => {
+    child.execute("INSERT INTO demo_items VALUES ($1)", [Int(7)]) |> ignore
+  })
+  tx.query("SELECT id FROM demo_items", [])
+})
+```
 
-SQL uses PostgreSQL `$1`, `$2`, … placeholders. `last_insert_id` is zero; use
-`INSERT ... RETURNING`. Queries materialize all rows in memory. The bridge's
-capabilities report transactions and RETURNING, but not server cursors,
-savepoints, notifications, or true prepared-statement handles.
+Pass `options=@pg.TransactionOptions(isolation_level=RepeatableRead, read_only=true)`
+when the operation needs explicit transaction settings. While a scope runs, use
+only the innermost active handle. The bridge rejects calls through the base
+driver, suspended parent handles, expired handles, and overlapping SQL
+operations. Transaction control in a scope goes through the callback API.
 
-## Reproduce
+If PostgreSQL rejects a statement, the bridge marks that scope failed. Even if
+the callback catches the statement error and returns successfully, the bridge
+rolls back the failed scope and reports a `QueryError`. A cancellation between
+database operations rolls back the scope. Cancellation during an active database
+operation discards the connection. Keep any tasks using a scope within its
+callback lifetime. If active work outlives that callback, the bridge aborts the
+connection. A failure during commit can leave the outcome unknown.
 
-Requires MoonBit 0.1.20261117 and PostgreSQL utilities (`initdb`, `pg_ctl`,
-`pg_isready`) on PATH:
+### Explicit transactions
+
+The moondb `AsyncDriver` methods `begin`, `commit`, and `rollback` are available
+for callers that manage the transaction lifecycle. Within an explicit
+transaction, `Bridge::with_savepoint` runs a bounded callback and then returns
+control to the caller. The bridge also supports savepoint recovery through
+moondb's nested `AsyncTxn::run`. Callers using explicit transactions are
+responsible for coordinating access between `begin` and completion.
+
+An unrecovered PostgreSQL error in an explicit transaction makes a later
+`commit` roll back and return a `QueryError`. Server errors retain SQLSTATE,
+severity, detail, and hint. Errors establishing or completing a transaction
+discard the connection. `close` is idempotent and aborts a connection with
+active work or an open transaction.
+
+## Type and operation support
+
+Inputs are `Null`, `Bool`, `Int`, `Int64`, `Double`, `Text`, `Blob`, and `Json`.
+The upstream client checks each parameter against the PostgreSQL type. Outputs
+include BOOL, INT2, INT4, INT8, FLOAT4, FLOAT8, TEXT, VARCHAR, BYTEA, JSON and
+JSONB with SQL NULL. Other types, including NUMERIC, dates, UUID and arrays,
+return a type error. JSON binding preserves number representations. JSONB may
+normalize whitespace and key order. Columns keep their order and names.
+
+SQL uses PostgreSQL `$1`, `$2`, … placeholders. Use `INSERT ... RETURNING` to
+get an inserted key. `last_insert_id` is zero. Queries materialize their rows
+in memory. The bridge reports support for transactions, savepoints, and
+RETURNING.
+
+## Reproduce the PostgreSQL tests
+
+Use MoonBit 0.1.20261117 with `initdb`, `pg_ctl`, and `pg_isready` on PATH.
 
 ```sh
 moon check --target native --deny-warn
-moon test --target native
+moon check --target wasm --deny-warn
 scripts/integration.sh
 PG_BRIDGE_TARGET=wasm scripts/integration.sh
 ```
 
-The ordinary test command skips the database scenario unless
-`PG_BRIDGE_INTEGRATION=1`; a passing ordinary test is not a database result.
-The integration script starts a temporary trust-authenticated database on
-127.0.0.1:55438 (override with `PG_BRIDGE_PORT`), runs the database suite and copies the source and a separate
-consumer into a temporary workspace to run its test. It refuses an occupied
-PostgreSQL port, stops the server on exit, and leaves temporary files for
-inspection. The consumer test uses local workspace source: it does **not** prove
-registry installation or independent deployment.
+Each script run starts a temporary PostgreSQL cluster on loopback port 55438,
+runs four database scenarios and one independent consumer test on the requested
+target, and stops the server on exit. Set `PG_BRIDGE_PORT` to use another port.
+The consumer imports the bridge from a temporary workspace populated from the
+checkout. Direct `moon test` runs the database scenarios only when
+`PG_BRIDGE_INTEGRATION=1` is set.
 
-The native and wasm real-database scenario covers binding and conversion of supported scalar
-types, nulls, commits, rollback after SQL error, SQLSTATE, concurrent rejection,
-cancellation and a fresh connection checking that cancelled work was not
-committed. These are targeted checks, not exhaustive concurrency or failure
-injection testing.
+The database scenarios cover parameter and row conversions, transaction commit
+and rollback, nested savepoint release, recovery from SQL errors, SQLSTATE
+propagation, access from expired or suspended handles, and cancellation both
+between and during SQL operations.
 
-## Remaining work
+## MoonBit implementation size
 
-Validate more cancellation timings, connection loss and transaction ownership;
-test multiple PostgreSQL versions and operating systems; decide whether to add
-more types and streaming; exercise actual downstream moondb consumers; publish a
-reviewed release and verify installation from the registry. The project has not
-been registered or submitted to the competition.
+The table counts implementation lines after excluding blank lines and
+whole-line comments. It excludes tests, generated interfaces, and dependencies.
+
+| File | Implementation lines |
+| --- | ---: |
+| `bridge.mbt` | 261 |
+| `transaction.mbt` | 204 |
+| `scope_sql.mbt` | 91 |
+| **Total** | **556** |
+
+```sh
+awk 'NF && $1 !~ /^\/\// { ++lines[FILENAME]; ++total }
+     END { for (i = 1; i < ARGC; ++i) print ARGV[i], lines[ARGV[i]]
+           print "total", total }' bridge.mbt transaction.mbt scope_sql.mbt
+```
